@@ -537,3 +537,105 @@ class TestCLIPhase3Integration(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["krate"])
         self.assertEqual(args.command, "krate")
+
+
+class TestCLIStake(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_stake_creates_object(self):
+        exit_code = main(["stake", "--title", "Use stdlib", "--body", "No external deps"])
+        self.assertEqual(exit_code, 0)
+
+    def test_stake_appends_trail(self):
+        main(["stake", "--title", "Decision One", "--body", "Body one"])
+        main(["stake", "--title", "Decision Two", "--body", "Body two"])
+        with open(".krume/refs/trail.log") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        self.assertEqual(len(lines), 2)
+
+    def test_stake_updates_latest_event(self):
+        main(["stake", "--title", "T", "--body", "B"])
+        with open(".krume/refs/latest-event") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_stake_with_tag(self):
+        exit_code = main(["stake", "--title", "T", "--body", "B", "--tag", "arch"])
+        self.assertEqual(exit_code, 0)
+
+    def test_stake_without_init_fails(self):
+        other = tempfile.mkdtemp()
+        orig = os.getcwd()
+        os.chdir(other)
+        exit_code = main(["stake", "--title", "T", "--body", "B"])
+        os.chdir(orig)
+        import shutil
+        shutil.rmtree(other, ignore_errors=True)
+        self.assertEqual(exit_code, 1)
+
+    def test_parser_stake(self):
+        parser = build_parser()
+        args = parser.parse_args(["stake", "--title", "T", "--body", "B"])
+        self.assertEqual(args.command, "stake")
+
+
+class TestCLISnag(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_snag_creates_object(self):
+        exit_code = main(["snag", "--title", "Bug", "--body", "It crashes"])
+        self.assertEqual(exit_code, 0)
+
+    def test_snag_appends_trail(self):
+        main(["snag", "--title", "S1", "--body", "B1"])
+        main(["snag", "--title", "S2", "--body", "B2"])
+        with open(".krume/refs/trail.log") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        self.assertEqual(len(lines), 2)
+
+    def test_snag_updates_latest_event(self):
+        main(["snag", "--title", "T", "--body", "B"])
+        with open(".krume/refs/latest-event") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_snag_with_status(self):
+        exit_code = main(["snag", "--title", "T", "--body", "B", "--status", "blocked"])
+        self.assertEqual(exit_code, 0)
+
+    def test_snag_with_tag(self):
+        exit_code = main(["snag", "--title", "T", "--body", "B", "--tag", "urgent"])
+        self.assertEqual(exit_code, 0)
+
+    def test_snag_without_init_fails(self):
+        other = tempfile.mkdtemp()
+        orig = os.getcwd()
+        os.chdir(other)
+        exit_code = main(["snag", "--title", "T", "--body", "B"])
+        os.chdir(orig)
+        import shutil
+        shutil.rmtree(other, ignore_errors=True)
+        self.assertEqual(exit_code, 1)
+
+    def test_parser_snag(self):
+        parser = build_parser()
+        args = parser.parse_args(["snag", "--title", "T", "--body", "B"])
+        self.assertEqual(args.command, "snag")
