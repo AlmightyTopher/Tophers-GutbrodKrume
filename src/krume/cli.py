@@ -28,6 +28,9 @@ def build_parser():
     run_p = sub.add_parser("run", help="Run a command and capture breadcrumbs")
     run_p.add_argument("argv", nargs=argparse.REMAINDER, help="Command to run (use -- to separate)")
 
+    checkpoint_p = sub.add_parser("checkpoint", help="Create a point-in-time project state record")
+    krate_p = sub.add_parser("krate", help="Create the current portable handoff packet")
+
     check_p = sub.add_parser("check", help="Run Forehead Check on the store")
 
     return parser
@@ -214,6 +217,15 @@ def cmd_run(store, args):
     }
     cmd_ref = store.put_object(cmd_obj)
 
+    proof_obj = {
+        "schema": "krume/proof/v1",
+        "verified_at": _now_iso(),
+        "command_ref": cmd_ref,
+        "output_ref": output_ref,
+        "exit_code": exit_code,
+    }
+    proof_ref = store.put_object(proof_obj)
+
     parent_ref = store.read_ref("latest-event")
     if parent_ref == "UNKNOWN":
         parent_ref = None
@@ -228,21 +240,11 @@ def cmd_run(store, args):
             "tool": None,
         },
         "summary": f"Ran: {summary}",
-        "refs": [cmd_ref, output_ref],
+        "refs": [cmd_ref, output_ref, proof_ref],
         "parent_event_ref": parent_ref,
         "tags": ["run"],
     }
     event_ref = store.put_object(event_obj)
-
-    proof_obj = {
-        "schema": "krume/proof/v1",
-        "verified_at": _now_iso(),
-        "command_ref": cmd_ref,
-        "output_ref": output_ref,
-        "event_ref": event_ref,
-        "exit_code": exit_code,
-    }
-    proof_ref = store.put_object(proof_obj)
 
     store.append_trail(event_ref)
     store.write_ref("latest-event", event_ref)
@@ -278,6 +280,282 @@ def cmd_run(store, args):
     return exit_code
 
 
+# ── Phase 3 helpers ─────────────────────────────────────────────
+
+
+def _git_info(store):
+    info = {"available": False}
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return info
+        r2 = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True, timeout=5)
+        branch = r2.stdout.strip() if r2.returncode == 0 else None
+        r3 = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        head = r3.stdout.strip() if r3.returncode == 0 else None
+        r4 = subprocess.run(["git", "status", "--short"], capture_output=True, text=True, timeout=5)
+        status_text = r4.stdout
+        dirty = bool(status_text.strip())
+        status_ref = store.put_content(status_text) if status_text else None
+        info = {
+            "available": True,
+            "head": head,
+            "branch": branch,
+            "dirty": dirty,
+            "status_ref": status_ref,
+        }
+    except Exception:
+        info = {"available": False}
+    return info
+
+
+def _scan_proof_refs(store):
+    proof_refs = []
+    trail = store.read_trail()
+    for line in trail:
+        try:
+            ev = store.get_object(line)
+        except Exception:
+            continue
+        if ev.get("kind") == "run":
+            refs = ev.get("refs", [])
+            for r in refs:
+                try:
+                    obj = store.get_object(r)
+                except Exception:
+                    continue
+                if obj.get("schema") == "krume/proof/v1":
+                    if r not in proof_refs:
+                        proof_refs.append(r)
+        if ev.get("kind") == "checkpoint":
+            refs = ev.get("refs", [])
+            for r in refs:
+                try:
+                    obj = store.get_object(r)
+                except Exception:
+                    continue
+                if obj.get("schema") == "krume/checkpoint/v1":
+                    cproofs = obj.get("proof_refs", [])
+                    for p in cproofs:
+                        if p not in proof_refs:
+                            proof_refs.append(p)
+    return proof_refs
+
+
+def _determine_vstatus(store, proof_refs, git_info):
+    if not proof_refs:
+        return "UNKNOWN"
+    latest_proof_ref = proof_refs[-1]
+    try:
+        proof = store.get_object(latest_proof_ref)
+    except Exception:
+        return "UNKNOWN"
+    ec = proof.get("exit_code", -1)
+    if ec != 0:
+        return "FAIL"
+    if not git_info.get("available"):
+        return "UNKNOWN"
+    if git_info.get("dirty"):
+        return "UNKNOWN"
+    return "PASS"
+
+
+def _append_event(store, event):
+    ref = store.put_object(event)
+    store.append_trail(ref)
+    store.write_ref("latest-event", ref)
+    trailhead = store.read_ref("trailhead")
+    if trailhead == "UNKNOWN" or trailhead is None:
+        store.write_ref("trailhead", ref)
+        store.write_ref("previous", "UNKNOWN")
+    else:
+        store.write_ref("previous", trailhead)
+    return ref
+
+
+# ── Phase 3 commands ────────────────────────────────────────────
+
+
+def cmd_checkpoint(store, args):
+    if not store.is_initialized():
+        print("ERROR: .krume/ not initialized. Run 'krume init' first.", file=sys.stderr)
+        return 1
+
+    latest_event_ref = store.read_ref("latest-event")
+    if latest_event_ref == "UNKNOWN":
+        latest_event_ref = None
+
+    proof_refs = _scan_proof_refs(store)
+    gi = _git_info(store)
+    vstatus = _determine_vstatus(store, proof_refs, gi)
+
+    checkpoint = {
+        "schema": "krume/checkpoint/v1",
+        "created_at": _now_iso(),
+        "checkpoint_kind": "standard",
+        "git": gi,
+        "latest_event_ref": latest_event_ref,
+        "proof_refs": proof_refs,
+        "verification_status": vstatus,
+    }
+    cp_ref = store.put_object(checkpoint)
+
+    event = {
+        "schema": "krume/event/v1",
+        "kind": "checkpoint",
+        "created_at": _now_iso(),
+        "actor": {"type": "system", "name": "krume", "tool": None},
+        "summary": f"Checkpoint: {vstatus}",
+        "refs": [cp_ref],
+        "parent_event_ref": latest_event_ref,
+        "tags": ["checkpoint"],
+    }
+    _append_event(store, event)
+
+    print(f"Checkpoint written: {cp_ref}")
+    print(f"Status: {vstatus}")
+    return 0
+
+
+def cmd_krate(store, args):
+    if not store.is_initialized():
+        print("ERROR: .krume/ not initialized. Run 'krume init' first.", file=sys.stderr)
+        return 1
+
+    latest_event_ref = store.read_ref("latest-event")
+    if latest_event_ref == "UNKNOWN":
+        latest_event_ref = None
+
+    trail = store.read_trail()
+
+    checkpoint_ref = None
+    for line in reversed(trail):
+        try:
+            ev = store.get_object(line)
+        except Exception:
+            continue
+        if ev.get("kind") == "checkpoint":
+            refs = ev.get("refs", [])
+            for r in refs:
+                try:
+                    obj = store.get_object(r)
+                except Exception:
+                    continue
+                if obj.get("schema") == "krume/checkpoint/v1":
+                    checkpoint_ref = r
+                    break
+            if checkpoint_ref:
+                break
+
+    proof_refs = _scan_proof_refs(store)
+    gi = _git_info(store)
+    vstatus = _determine_vstatus(store, proof_refs, gi)
+
+    manifest = {
+        "schema": "krume/manifest/v1",
+        "created_at": _now_iso(),
+        "project": "Topher's GutbrodKrume",
+        "objective": "Continue project from verified GutbrodKrume trail.",
+        "checkpoint_ref": checkpoint_ref,
+        "latest_event_ref": latest_event_ref,
+        "proof_refs": proof_refs,
+        "priority_queue": [
+            {"priority": 1, "title": "Continue from current GutbrodKrume state", "status": "open", "ref": None}
+        ],
+        "verification_status": vstatus,
+    }
+    manifest_ref = store.put_object(manifest)
+
+    old_trailhead = store.read_ref("trailhead")
+    if old_trailhead == "UNKNOWN":
+        old_trailhead = None
+
+    krate = {
+        "schema": "krume/krate/v1",
+        "created_at": _now_iso(),
+        "project": "Topher's GutbrodKrume",
+        "from_actor": "krume",
+        "to_actor": "any",
+        "trailhead_ref": manifest_ref,
+        "checkpoint_ref": checkpoint_ref,
+        "instructions": {
+            "canonical": "Read this Krate, resolve trailhead_ref with krume read, inspect Proof before trusting summaries, continue from priority_queue, run krume check before claiming completion, and write a new Checkpoint and Krate before stopping.",
+            "compressed": "Read Krate -> resolve trailhead -> inspect Proof -> follow queue -> check -> checkpoint+krate before stop.",
+        },
+        "priority_queue": [
+            {"priority": 1, "title": "Continue from current GutbrodKrume state", "status": "open", "ref": None}
+        ],
+        "proof_refs": proof_refs,
+        "verification_status": vstatus,
+        "reader_protocol": [
+            "Read this Krate.",
+            "Resolve trailhead_ref with krume read.",
+            "Inspect Proof before trusting summaries.",
+            "Continue from priority_queue only.",
+            "Run krume check before claiming completion.",
+            "Write new Checkpoint and Krate before stopping.",
+        ],
+    }
+    krate_ref = store.put_object(krate)
+
+    store.write_export_krate(krate)
+
+    old_trailhead_original = old_trailhead
+
+    proof_lines = "\n".join(f"- {r}" for r in proof_refs) if proof_refs else "No Proof refs captured yet."
+    trail_note = f"""# Topher's GutbrodKrume Trail Note
+
+## Status Snapshot
+
+- Verification Status: {vstatus}
+- Trailhead: {manifest_ref}
+- Checkpoint: {checkpoint_ref or 'None'}
+- Latest Event: {latest_event_ref or 'None'}
+
+## Reader Protocol
+
+1. Read `.krume/export/current-krate.json`.
+2. Resolve `trailhead_ref` with `krume read <hash>`.
+3. Inspect Proof before trusting summaries.
+4. Continue from `priority_queue`.
+5. Run `krume check`.
+6. Write new Checkpoint and Krate before stopping.
+
+## Priority Queue
+
+1. Continue from current GutbrodKrume state.
+
+## Proof Refs
+
+{proof_lines}
+"""
+    store.write_export_trail_note(trail_note.strip())
+
+    event = {
+        "schema": "krume/event/v1",
+        "kind": "krate",
+        "created_at": _now_iso(),
+        "actor": {"type": "system", "name": "krume", "tool": None},
+        "summary": f"Krate: {vstatus}",
+        "refs": [manifest_ref, krate_ref],
+        "parent_event_ref": latest_event_ref,
+        "tags": ["krate"],
+    }
+    event_ref = store.put_object(event)
+    store.append_trail(event_ref)
+    store.write_ref("latest-event", event_ref)
+    store.write_ref("previous", old_trailhead_original if old_trailhead_original else "UNKNOWN")
+    store.write_ref("trailhead", manifest_ref)
+
+    print(f"Krate written: .krume/export/current-krate.json")
+    print(f"Trail Note written: .krume/export/current-trail-note.md")
+    print(f"Trailhead: {manifest_ref}")
+    print(f"Status: {vstatus}")
+    return 0
+
+
+# ── Minimal Phase 2 change: add proof_ref to event refs ─────────
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -292,6 +570,8 @@ def main(argv=None):
         "note": cmd_note,
         "read": cmd_read,
         "run": cmd_run,
+        "checkpoint": cmd_checkpoint,
+        "krate": cmd_krate,
         "check": cmd_check,
     }
 

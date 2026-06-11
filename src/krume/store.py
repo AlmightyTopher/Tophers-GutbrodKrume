@@ -244,7 +244,46 @@ class KrumStore:
             if not self.object_exists(latest):
                 issues.append(f"latest-event ref missing or corrupt: {latest}")
 
+        trailhead = self.read_ref("trailhead")
+        if trailhead and trailhead != "UNKNOWN":
+            if not self.object_exists(trailhead):
+                issues.append(f"trailhead ref missing or corrupt: {trailhead}")
+
+        previous = self.read_ref("previous")
+        if previous and previous != "UNKNOWN":
+            if not self.object_exists(previous):
+                issues.append(f"previous ref missing or corrupt: {previous}")
+
+        krate = None
+        try:
+            krate = self.read_export_krate()
+        except (json.JSONDecodeError, ValueError, OSError) as e:
+            issues.append(f"Krate JSON malformed: {e}")
+
+        if krate is not None:
+            krate_th = krate.get("trailhead_ref")
+            if krate_th:
+                if not krate_th.startswith(REF_PREFIX):
+                    issues.append(f"Krate trailhead_ref invalid format: {krate_th}")
+                elif not self.object_exists(krate_th):
+                    issues.append(f"Krate trailhead_ref missing or corrupt: {krate_th}")
+
+            krate_cp = krate.get("checkpoint_ref")
+            if krate_cp and krate_cp.startswith(REF_PREFIX):
+                if not self.object_exists(krate_cp):
+                    issues.append(f"Krate checkpoint_ref missing or corrupt: {krate_cp}")
+
+            if not self.export_trail_note_exists():
+                issues.append("Krate exists but Trail Note is missing")
+
         return issues
+
+    # ── Phase 3 helpers ──────────────────────────────────────────────
+
+    def resolve_if_ref(self, value):
+        if value and value != "UNKNOWN" and value.startswith(REF_PREFIX):
+            return value
+        return None
 
     # ── content blobs (raw text) ──────────────────────────────────────
 
@@ -269,3 +308,24 @@ class KrumStore:
 
     def is_initialized(self):
         return _path_exists(self._abs(KRUME_DIR, "config.json"))
+
+    # ── export helpers (Phase 3) ─────────────────────────────────────
+
+    def read_export_krate(self):
+        p = self._abs(EXPORT_DIR, "current-krate.json")
+        if not _path_exists(p):
+            return None
+        raw = _read_file(p)
+        return json.loads(raw.decode("utf-8"))
+
+    def export_krate_exists(self):
+        return _path_exists(self._abs(EXPORT_DIR, "current-krate.json"))
+
+    def export_trail_note_exists(self):
+        return _path_exists(self._abs(EXPORT_DIR, "current-trail-note.md"))
+
+    def read_export_trail_note_raw(self):
+        p = self._abs(EXPORT_DIR, "current-trail-note.md")
+        if not _path_exists(p):
+            return None
+        return _read_file(p).decode("utf-8")
