@@ -216,6 +216,25 @@ class TestKrumStoreCheck(unittest.TestCase):
         issues = self.store.check()
         self.assertEqual(issues, [])
 
+    def test_put_and_get_content(self):
+        self.store.init()
+        ref = self.store.put_content("hello world")
+        self.assertTrue(ref.startswith(REF_PREFIX))
+        text = self.store.get_content(ref)
+        self.assertEqual(text, "hello world")
+
+    def test_put_content_dedup(self):
+        self.store.init()
+        ref1 = self.store.put_content("same text")
+        ref2 = self.store.put_content("same text")
+        self.assertEqual(ref1, ref2)
+
+    def test_get_content_wrong_schema(self):
+        self.store.init()
+        ref = self.store.put_object({"schema": "other", "data": "hi"})
+        with self.assertRaises(ValueError):
+            self.store.get_content(ref)
+
     def test_check_fails_corrupt_object(self):
         self.store.init()
         ref = self.store.put_object({"a": 1})

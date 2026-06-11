@@ -246,6 +246,21 @@ class KrumStore:
 
         return issues
 
+    # ── content blobs (raw text) ──────────────────────────────────────
+
+    def put_content(self, text):
+        data = {
+            "schema": "krume/content/v1",
+            "data": text,
+        }
+        return self.put_object(data)
+
+    def get_content(self, ref):
+        obj = self.get_object(ref)
+        if obj.get("schema") != "krume/content/v1":
+            raise ValueError(f"Not a content object: {ref}")
+        return obj["data"]
+
     # ── helpers ───────────────────────────────────────────────────────
 
     def _write_json(self, path, data):
