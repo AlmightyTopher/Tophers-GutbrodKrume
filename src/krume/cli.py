@@ -9,6 +9,7 @@ import time
 
 import datetime
 
+from . import __version__ as KRUME_VERSION
 from .store import KrumStore, REF_PREFIX, KRUME_DIR, _now_iso
 
 
@@ -19,34 +20,36 @@ def build_parser():
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init_p = sub.add_parser("init", help="Initialize .krume store in current directory")
-    note_p = sub.add_parser("note", help="Record a krume event note")
+    init_p = sub.add_parser("init", help="Initialize a new Krume store in the current directory")
+    note_p = sub.add_parser("note", help="Record a breadcrumb event note")
     note_p.add_argument("--summary", required=True, help="Summary of the event")
     note_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
 
-    read_p = sub.add_parser("read", help="Read a krume object by hash ref")
+    read_p = sub.add_parser("read", help="Read a Krume object by hash ref")
     read_p.add_argument("hash", help="krume:sha256:<hash> reference")
 
-    run_p = sub.add_parser("run", help="Run a command and capture breadcrumbs")
+    run_p = sub.add_parser("run", help="Run a command and capture Proof")
     run_p.add_argument("argv", nargs=argparse.REMAINDER, help="Command to run (use -- to separate)")
 
-    adopt_p = sub.add_parser("adopt", help="Adopt existing project into GutbrodKrume tracking")
+    adopt_p = sub.add_parser("adopt", help="Adopt an existing project into Krume tracking")
 
-    stake_p = sub.add_parser("stake", help="Record a decision stake")
+    stake_p = sub.add_parser("stake", help="Record a decision Stake")
     stake_p.add_argument("--title", required=True, help="Decision title")
     stake_p.add_argument("--body", required=True, help="Decision details")
     stake_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
 
-    snag_p = sub.add_parser("snag", help="Record a blocker or problem")
+    snag_p = sub.add_parser("snag", help="Record a Snag (blocker or problem)")
     snag_p.add_argument("--title", required=True, help="Problem title")
     snag_p.add_argument("--body", required=True, help="Problem details")
     snag_p.add_argument("--status", choices=["open", "closed", "blocked"], default="open", help="Status level")
     snag_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
 
-    checkpoint_p = sub.add_parser("checkpoint", help="Create a point-in-time project state record")
-    krate_p = sub.add_parser("krate", help="Create the current portable handoff packet")
+    checkpoint_p = sub.add_parser("checkpoint", help="Create a Checkpoint snapshot of project state")
+    krate_p = sub.add_parser("krate", help="Create the current portable Krate handoff packet")
 
-    check_p = sub.add_parser("check", help="Run Forehead Check on the store")
+    check_p = sub.add_parser("check", help="Run the Forehead Check on store integrity")
+
+    version_p = sub.add_parser("version", help="Show the Krume version")
 
     return parser
 
@@ -926,6 +929,11 @@ def cmd_krate(store, args):
     return 0
 
 
+def cmd_version(store, args):
+    print(f"Topher's GutbrodKrume {KRUME_VERSION}")
+    return 0
+
+
 # ── Minimal Phase 2 change: add proof_ref to event refs ─────────
 
 def main(argv=None):
@@ -948,6 +956,7 @@ def main(argv=None):
         "checkpoint": cmd_checkpoint,
         "krate": cmd_krate,
         "check": cmd_check,
+        "version": cmd_version,
     }
 
     fn = dispatch.get(args.command)

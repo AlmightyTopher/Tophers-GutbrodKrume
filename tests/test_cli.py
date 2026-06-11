@@ -725,3 +725,154 @@ class TestCLIPhase6Integration(unittest.TestCase):
         main(["krate"])
         exit_code = main(["check"])
         self.assertEqual(exit_code, 0)
+
+
+class TestCLIVersion(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_version_exits_zero(self):
+        exit_code = main(["version"])
+        self.assertEqual(exit_code, 0)
+
+    def test_version_prints_name(self):
+        with patch("sys.stdout") as mock_stdout:
+            main(["version"])
+
+    def test_version_contains_name(self):
+        from io import StringIO
+        captured = StringIO()
+        old_out = sys.stdout
+        sys.stdout = captured
+        try:
+            main(["version"])
+        finally:
+            sys.stdout = old_out
+        output = captured.getvalue()
+        self.assertIn("Topher's GutbrodKrume", output)
+
+    def test_version_contains_number(self):
+        from io import StringIO
+        captured = StringIO()
+        old_out = sys.stdout
+        sys.stdout = captured
+        try:
+            main(["version"])
+        finally:
+            sys.stdout = old_out
+        output = captured.getvalue()
+        self.assertIn("0.7.0-phase7", output)
+
+
+class TestCLIHelp(unittest.TestCase):
+    def test_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            build_parser().parse_args(["--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_help_lists_version(self):
+        help_text = build_parser().format_help()
+        self.assertIn("version", help_text)
+
+    def test_help_lists_init(self):
+        help_text = build_parser().format_help()
+        self.assertIn("init", help_text)
+
+    def test_help_lists_note(self):
+        help_text = build_parser().format_help()
+        self.assertIn("note", help_text)
+
+    def test_help_lists_read(self):
+        help_text = build_parser().format_help()
+        self.assertIn("read", help_text)
+
+    def test_help_lists_run(self):
+        help_text = build_parser().format_help()
+        self.assertIn("run", help_text)
+
+    def test_help_lists_checkpoint(self):
+        help_text = build_parser().format_help()
+        self.assertIn("checkpoint", help_text)
+
+    def test_help_lists_krate(self):
+        help_text = build_parser().format_help()
+        self.assertIn("krate", help_text)
+
+    def test_help_lists_stake(self):
+        help_text = build_parser().format_help()
+        self.assertIn("stake", help_text)
+
+    def test_help_lists_snag(self):
+        help_text = build_parser().format_help()
+        self.assertIn("snag", help_text)
+
+    def test_help_lists_adopt(self):
+        help_text = build_parser().format_help()
+        self.assertIn("adopt", help_text)
+
+    def test_help_lists_check(self):
+        help_text = build_parser().format_help()
+        self.assertIn("check", help_text)
+
+    def test_check_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            build_parser().parse_args(["check", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_krate_help_exits_zero(self):
+        with self.assertRaises(SystemExit) as cm:
+            build_parser().parse_args(["krate", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
+class TestREADME(unittest.TestCase):
+    def setUp(self):
+        self.readme_path = os.path.join(os.path.dirname(__file__), "..", "README.md")
+
+    def test_readme_exists(self):
+        self.assertTrue(os.path.exists(self.readme_path))
+
+    def test_readme_contains_tagline(self):
+        with open(self.readme_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Good bread. Better crumbs. Verified AI handoffs.", content)
+
+    def test_readme_existing_files_not_proof(self):
+        with open(self.readme_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Existing files are baseline reality, not Proof.", content)
+
+    def test_readme_task_complete_rule(self):
+        with open(self.readme_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("No task is complete without verified output, Proof, Checkpoint, and updated Krate.", content)
+
+
+class TestAGENTS(unittest.TestCase):
+    def setUp(self):
+        self.agents_path = os.path.join(os.path.dirname(__file__), "..", "AGENTS.md")
+
+    def test_agents_exists(self):
+        self.assertTrue(os.path.exists(self.agents_path))
+
+    def test_agents_contains_krate_export(self):
+        with open(self.agents_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn(".krume/export/current-krate.json", content)
+
+    def test_agents_inspect_proof(self):
+        with open(self.agents_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Inspect Proof objects before trusting summaries.", content)
+
+    def test_agents_task_complete_rule(self):
+        with open(self.agents_path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("No task is complete without verified output, Proof, Checkpoint, and updated Krate.", content)
