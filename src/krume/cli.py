@@ -647,6 +647,48 @@ def cmd_snag(store, args):
     return 0
 
 
+def _scan_stakes(store):
+    stake_refs = []
+    trail = store.read_trail()
+    for line in trail:
+        try:
+            ev = store.get_object(line)
+        except Exception:
+            continue
+        if ev.get("kind") == "stake":
+            for r in ev.get("refs", []):
+                try:
+                    obj = store.get_object(r)
+                except Exception:
+                    continue
+                if obj.get("schema") == "krume/stake/v1":
+                    if r not in stake_refs:
+                        stake_refs.append(r)
+    return stake_refs
+
+
+def _scan_snags(store, active_only=True):
+    snag_refs = []
+    trail = store.read_trail()
+    for line in trail:
+        try:
+            ev = store.get_object(line)
+        except Exception:
+            continue
+        if ev.get("kind") == "snag":
+            for r in ev.get("refs", []):
+                try:
+                    obj = store.get_object(r)
+                except Exception:
+                    continue
+                if obj.get("schema") == "krume/snag/v1":
+                    if active_only and obj.get("status") == "closed":
+                        continue
+                    if r not in snag_refs:
+                        snag_refs.append(r)
+    return snag_refs
+
+
 # ── Phase 3 commands ────────────────────────────────────────────
 
 
@@ -660,6 +702,8 @@ def cmd_checkpoint(store, args):
         latest_event_ref = None
 
     proof_refs = _scan_proof_refs(store)
+    stake_refs = _scan_stakes(store)
+    snag_refs_all = _scan_snags(store, active_only=False)
     gi = _git_info(store)
     vstatus = _determine_vstatus(store, proof_refs, gi)
 
@@ -670,6 +714,8 @@ def cmd_checkpoint(store, args):
         "git": gi,
         "latest_event_ref": latest_event_ref,
         "proof_refs": proof_refs,
+        "stake_refs": stake_refs,
+        "snag_refs": snag_refs_all,
         "verification_status": vstatus,
     }
     cp_ref = store.put_object(checkpoint)
@@ -687,7 +733,14 @@ def cmd_checkpoint(store, args):
     _append_event(store, event)
 
     print(f"Checkpoint written: {cp_ref}")
-    print(f"Status: {vstatus}")
+    stake_count = len(stake_refs)
+    snag_count = len(snag_refs_all)
+    summary_parts = [f"Status: {vstatus}"]
+    if stake_count:
+        summary_parts.append(f"Stakes: {stake_count}")
+    if snag_count:
+        summary_parts.append(f"Snags: {snag_count}")
+    print(f"  {' | '.join(summary_parts)}")
     return 0
 
 
@@ -722,6 +775,8 @@ def cmd_krate(store, args):
                 break
 
     proof_refs = _scan_proof_refs(store)
+    stake_refs = _scan_stakes(store)
+    snag_refs = _scan_snags(store, active_only=True)
     gi = _git_info(store)
     vstatus = _determine_vstatus(store, proof_refs, gi)
 
@@ -733,6 +788,8 @@ def cmd_krate(store, args):
         "checkpoint_ref": checkpoint_ref,
         "latest_event_ref": latest_event_ref,
         "proof_refs": proof_refs,
+        "stake_refs": stake_refs,
+        "snag_refs": snag_refs,
         "priority_queue": [
             {"priority": 1, "title": "Continue from current GutbrodKrume state", "status": "open", "ref": None}
         ],
@@ -753,18 +810,21 @@ def cmd_krate(store, args):
         "trailhead_ref": manifest_ref,
         "checkpoint_ref": checkpoint_ref,
         "instructions": {
-            "canonical": "Read this Krate, resolve trailhead_ref with krume read, inspect Proof before trusting summaries, continue from priority_queue, run krume check before claiming completion, and write a new Checkpoint and Krate before stopping.",
-            "compressed": "Read Krate -> resolve trailhead -> inspect Proof -> follow queue -> check -> checkpoint+krate before stop.",
+            "canonical": "Read this Krate, resolve trailhead_ref with krume read, inspect Proof before trusting summaries, review active Stakes and Snags, continue from priority_queue, run krume check before claiming completion, and write a new Checkpoint and Krate before stopping.",
+            "compressed": "Read Krate -> resolve trailhead -> inspect Proof -> review Stakes/Snags -> follow queue -> check -> checkpoint+krate before stop.",
         },
         "priority_queue": [
             {"priority": 1, "title": "Continue from current GutbrodKrume state", "status": "open", "ref": None}
         ],
         "proof_refs": proof_refs,
+        "stake_refs": stake_refs,
+        "snag_refs": snag_refs,
         "verification_status": vstatus,
         "reader_protocol": [
             "Read this Krate.",
             "Resolve trailhead_ref with krume read.",
             "Inspect Proof before trusting summaries.",
+            "Review active Stakes and Snags.",
             "Continue from priority_queue only.",
             "Run krume check before claiming completion.",
             "Write new Checkpoint and Krate before stopping.",
@@ -777,6 +837,33 @@ def cmd_krate(store, args):
     old_trailhead_original = old_trailhead
 
     proof_lines = "\n".join(f"- {r}" for r in proof_refs) if proof_refs else "No Proof refs captured yet."
+
+    stake_lines = ""
+    if stake_refs:
+        stake_items = []
+        for r in stake_refs:
+            try:
+                s = store.get_object(r)
+                stake_items.append(f"- {s.get('title', '?')} ({r})")
+            except Exception:
+                stake_items.append(f"- (corrupt) {r}")
+        stake_lines = "\n" + "\n".join(stake_items)
+    else:
+        stake_lines = "\nNo Stakes recorded yet."
+
+    snag_lines = ""
+    if snag_refs:
+        snag_items = []
+        for r in snag_refs:
+            try:
+                s = store.get_object(r)
+                snag_items.append(f"- {s.get('title', '?')} [{s.get('status', '?')}] ({r})")
+            except Exception:
+                snag_items.append(f"- (corrupt) {r}")
+        snag_lines = "\n" + "\n".join(snag_items)
+    else:
+        snag_lines = "\nNo active Snags."
+
     trail_note = f"""# Topher's GutbrodKrume Trail Note
 
 ## Status Snapshot
@@ -785,15 +872,18 @@ def cmd_krate(store, args):
 - Trailhead: {manifest_ref}
 - Checkpoint: {checkpoint_ref or 'None'}
 - Latest Event: {latest_event_ref or 'None'}
+- Active Stakes: {len(stake_refs)}
+- Active Snags: {len(snag_refs)}
 
 ## Reader Protocol
 
 1. Read `.krume/export/current-krate.json`.
 2. Resolve `trailhead_ref` with `krume read <hash>`.
 3. Inspect Proof before trusting summaries.
-4. Continue from `priority_queue`.
-5. Run `krume check`.
-6. Write new Checkpoint and Krate before stopping.
+4. Review active Stakes and Snags.
+5. Continue from `priority_queue`.
+6. Run `krume check`.
+7. Write new Checkpoint and Krate before stopping.
 
 ## Priority Queue
 
@@ -802,6 +892,14 @@ def cmd_krate(store, args):
 ## Proof Refs
 
 {proof_lines}
+
+## Active Stakes
+
+{stake_lines}
+
+## Active Snags
+
+{snag_lines}
 """
     store.write_export_trail_note(trail_note.strip())
 
