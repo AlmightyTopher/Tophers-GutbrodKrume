@@ -7,7 +7,9 @@ import sys
 import os
 import time
 
-from .store import KrumStore, REF_PREFIX, _now_iso
+import datetime
+
+from .store import KrumStore, REF_PREFIX, KRUME_DIR, _now_iso
 
 
 def build_parser():
@@ -27,6 +29,8 @@ def build_parser():
 
     run_p = sub.add_parser("run", help="Run a command and capture breadcrumbs")
     run_p.add_argument("argv", nargs=argparse.REMAINDER, help="Command to run (use -- to separate)")
+
+    adopt_p = sub.add_parser("adopt", help="Adopt existing project into GutbrodKrume tracking")
 
     checkpoint_p = sub.add_parser("checkpoint", help="Create a point-in-time project state record")
     krate_p = sub.add_parser("krate", help="Create the current portable handoff packet")
@@ -373,6 +377,171 @@ def _append_event(store, event):
     return ref
 
 
+def _scan_files(store):
+    entries = []
+    root = os.getcwd()
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        parts = rel_dir.replace("\\", "/").split("/")
+        if KRUME_DIR in parts:
+            continue
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, root).replace("\\", "/")
+            try:
+                st = os.stat(fp)
+                entries.append({
+                    "path": rel,
+                    "size": st.st_size,
+                    "mtime": datetime.datetime.fromtimestamp(
+                        st.st_mtime, tz=datetime.timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
+                })
+            except OSError:
+                continue
+    entries.sort(key=lambda e: e["path"])
+    inventory = {
+        "schema": "krume/inventory/v1",
+        "project_root": str(root),
+        "file_count": len(entries),
+        "entries": entries,
+        "scanned_at": _now_iso(),
+    }
+    return store.put_object(inventory), inventory
+
+
+def cmd_adopt(store, args):
+    if store.is_initialized():
+        print("ERROR: .krume/ already exists. Use 'krume checkpoint' and 'krume krate' instead.", file=sys.stderr)
+        return 1
+
+    store.init()
+    print("Topher's GutbrodKrume initialized.")
+    print("Store: .krume/")
+
+    inventory_ref, inventory = _scan_files(store)
+    file_count = inventory["file_count"]
+
+    gi = _git_info(store)
+
+    checkpoint = {
+        "schema": "krume/checkpoint/v1",
+        "created_at": _now_iso(),
+        "checkpoint_kind": "adoption",
+        "git": gi,
+        "inventory_ref": inventory_ref,
+        "file_count": file_count,
+        "latest_event_ref": None,
+        "proof_refs": [],
+        "verification_status": "UNKNOWN",
+    }
+    cp_ref = store.put_object(checkpoint)
+
+    event = {
+        "schema": "krume/event/v1",
+        "kind": "adoption",
+        "created_at": _now_iso(),
+        "actor": {"type": "system", "name": "krume", "tool": None},
+        "summary": f"Adopted project with {file_count} files",
+        "refs": [cp_ref, inventory_ref],
+        "parent_event_ref": None,
+        "tags": ["adoption"],
+    }
+    old_trailhead = store.read_ref("trailhead")
+    event_ref = _append_event(store, event)
+
+    print(f"Adoption Checkpoint written: {cp_ref}")
+    print(f"  Files recorded: {file_count}")
+    print(f"  Status: UNKNOWN")
+
+    manifest = {
+        "schema": "krume/manifest/v1",
+        "created_at": _now_iso(),
+        "project": "Topher's GutbrodKrume",
+        "objective": "Adopted existing project. Establish baseline from current state.",
+        "checkpoint_ref": cp_ref,
+        "latest_event_ref": event_ref,
+        "proof_refs": [],
+        "inventory_ref": inventory_ref,
+        "priority_queue": [
+            {"priority": 1, "title": "Inspect baseline and continue project work", "status": "open", "ref": None}
+        ],
+        "verification_status": "UNKNOWN",
+    }
+    manifest_ref = store.put_object(manifest)
+
+    krate = {
+        "schema": "krume/krate/v1",
+        "created_at": _now_iso(),
+        "project": "Topher's GutbrodKrume",
+        "from_actor": "krume",
+        "to_actor": "any",
+        "trailhead_ref": manifest_ref,
+        "checkpoint_ref": cp_ref,
+        "instructions": {
+            "canonical": "Adoption baseline. No Proof exists for pre-existing files. Run krume run to create verified Proof. Run krume check before claiming completion, then write Checkpoint and Krate.",
+            "compressed": "Adoption baseline. No Proof for existing files. Create Proof with krume run.",
+        },
+        "priority_queue": [
+            {"priority": 1, "title": "Inspect baseline and continue project work", "status": "open", "ref": None}
+        ],
+        "proof_refs": [],
+        "verification_status": "UNKNOWN",
+        "inventory_ref": inventory_ref,
+        "reader_protocol": [
+            "This is an ADOPTION krate — existing files have NO Proof.",
+            "Read the Krate.",
+            "Resolve trailhead_ref with krume read.",
+            "Run krume run to create verified Proof for any changes.",
+            "Run krume check before claiming completion.",
+            "Write new Checkpoint and Krate before stopping.",
+        ],
+    }
+    krate_ref = store.put_object(krate)
+
+    store.write_export_krate(krate)
+
+    proof_lines = "No Proof refs captured yet (adoption baseline)."
+    trail_note = f"""# Topher's GutbrodKrume Trail Note
+
+## Status Snapshot
+
+- Verification Status: UNKNOWN
+- Trailhead: {manifest_ref}
+- Checkpoint: {cp_ref}
+- Inventory: {inventory_ref}
+- Files Recorded: {file_count}
+- Latest Event: {event_ref or 'None'}
+
+## Reader Protocol
+
+1. This is an ADOPTION krate — existing files have NO Proof.
+2. Read `current-krate.json`.
+3. Resolve `trailhead_ref` with `krume read`.
+4. Run `krume run` to create verified Proof for changes.
+5. Run `krume check`.
+6. Write new Checkpoint and Krate before stopping.
+
+## Proof Refs
+
+{proof_lines}
+
+## File Inventory
+
+This krate records {file_count} files at adoption time.
+Use `krume read {inventory_ref}` to list all files.
+"""
+    store.write_export_trail_note(trail_note.strip())
+
+    store.write_ref("previous", old_trailhead if old_trailhead and old_trailhead != "UNKNOWN" else "UNKNOWN")
+    store.write_ref("trailhead", manifest_ref)
+
+    print(f"Krate written: .krume/export/current-krate.json")
+    print(f"Trail Note written: .krume/export/current-trail-note.md")
+    print(f"Trailhead: {manifest_ref}")
+    return 0
+
+
 # ── Phase 3 commands ────────────────────────────────────────────
 
 
@@ -570,6 +739,7 @@ def main(argv=None):
         "note": cmd_note,
         "read": cmd_read,
         "run": cmd_run,
+        "adopt": cmd_adopt,
         "checkpoint": cmd_checkpoint,
         "krate": cmd_krate,
         "check": cmd_check,
