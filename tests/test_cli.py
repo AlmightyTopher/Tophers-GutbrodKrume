@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -391,6 +392,82 @@ class TestCLIKrate(unittest.TestCase):
         main(["run", sys.executable, "-c", "print('ok')"])
         exit_code = main(["krate"])
         self.assertEqual(exit_code, 0)
+
+
+class TestCLIAdopt(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_adopt_initializes_store(self):
+        exit_code = main(["adopt"])
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(os.path.exists(".krume/config.json"))
+
+    def test_adopt_fails_if_already_initialized(self):
+        main(["init"])
+        exit_code = main(["adopt"])
+        self.assertEqual(exit_code, 1)
+
+    def test_adopt_status_unknown(self):
+        main(["adopt"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertEqual(krate["verification_status"], "UNKNOWN")
+
+    def test_adopt_creates_krate_export(self):
+        main(["adopt"])
+        self.assertTrue(os.path.exists(".krume/export/current-krate.json"))
+
+    def test_adopt_creates_trail_note(self):
+        main(["adopt"])
+        self.assertTrue(os.path.exists(".krume/export/current-trail-note.md"))
+
+    def test_adopt_trailhead_resolves(self):
+        main(["adopt"])
+        with open(".krume/refs/trailhead") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_adopt_previous_is_unknown(self):
+        main(["adopt"])
+        with open(".krume/refs/previous") as f:
+            prev = f.read().strip()
+        self.assertEqual(prev, "UNKNOWN")
+
+    def test_adopt_records_files(self):
+        with open("main.py", "w") as f:
+            f.write("# hello\n")
+        with open("README.md", "w") as f:
+            f.write("# Project\n")
+        main(["adopt"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertEqual(krate["verification_status"], "UNKNOWN")
+        self.assertIn("inventory_ref", krate)
+
+    def test_adopt_checkpoint_kind(self):
+        main(["adopt"])
+        with open(".krume/refs/trail.log") as f:
+            ref = f.read().strip().split("\n")[0]
+        ev = json.loads(subprocess.check_output([sys.executable, "-m", "krume", "read", ref], text=True, cwd=self.tmpdir))
+        self.assertEqual(ev.get("kind"), "adoption")
+
+    def test_adopt_with_check(self):
+        main(["adopt"])
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
+
+    def test_adopt_parser(self):
+        parser = build_parser()
+        args = parser.parse_args(["adopt"])
+        self.assertEqual(args.command, "adopt")
 
 
 class TestCLIPhase3Integration(unittest.TestCase):
