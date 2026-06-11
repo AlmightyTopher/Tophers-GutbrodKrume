@@ -198,7 +198,7 @@ class KrumStore:
         if not _path_exists(p):
             return []
         raw = _read_text(p)
-        return [line for line in raw.split("\n") if line.strip()]
+        return [line for line in raw.splitlines() if line.strip()]
 
     def write_export_krate(self, data):
         self._write_json(self._abs(EXPORT_DIR, "current-krate.json"), data)
@@ -272,6 +272,11 @@ class KrumStore:
             if krate_cp and krate_cp.startswith(REF_PREFIX):
                 if not self.object_exists(krate_cp):
                     issues.append(f"Krate checkpoint_ref missing or corrupt: {krate_cp}")
+
+            for ref_list_key, label in [("stake_refs", "stake_ref"), ("snag_refs", "snag_ref")]:
+                for ref in krate.get(ref_list_key, []):
+                    if ref and ref.startswith(REF_PREFIX) and not self.object_exists(ref):
+                        issues.append(f"Krate {label} missing or corrupt: {ref}")
 
             if not self.export_trail_note_exists():
                 issues.append("Krate exists but Trail Note is missing")

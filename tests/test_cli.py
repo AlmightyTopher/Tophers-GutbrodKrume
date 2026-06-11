@@ -639,3 +639,89 @@ class TestCLISnag(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["snag", "--title", "T", "--body", "B"])
         self.assertEqual(args.command, "snag")
+
+
+class TestCLIPhase6Integration(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_checkpoint_includes_stakes(self):
+        main(["stake", "--title", "Decision A", "--body", "Body"])
+        main(["stake", "--title", "Decision B", "--body", "Body"])
+        main(["checkpoint"])
+        with open(".krume/refs/trail.log") as f:
+            trail = [l.strip() for l in f if l.strip()]
+        cp_event_ref = trail[-1]
+        ev = json.loads(subprocess.check_output([sys.executable, "-m", "krume", "read", cp_event_ref], text=True, cwd=self.tmpdir))
+        cp_ref = ev["refs"][0]
+        cp = json.loads(subprocess.check_output([sys.executable, "-m", "krume", "read", cp_ref], text=True, cwd=self.tmpdir))
+        self.assertIn("stake_refs", cp)
+        self.assertEqual(len(cp["stake_refs"]), 2)
+
+    def test_checkpoint_includes_snags(self):
+        main(["snag", "--title", "Bug A", "--body", "Body"])
+        main(["snag", "--title", "Bug B", "--body", "Body"])
+        main(["checkpoint"])
+        with open(".krume/refs/trail.log") as f:
+            trail = [l.strip() for l in f if l.strip()]
+        cp_event_ref = trail[-1]
+        ev = json.loads(subprocess.check_output([sys.executable, "-m", "krume", "read", cp_event_ref], text=True, cwd=self.tmpdir))
+        cp_ref = ev["refs"][0]
+        cp = json.loads(subprocess.check_output([sys.executable, "-m", "krume", "read", cp_ref], text=True, cwd=self.tmpdir))
+        self.assertIn("snag_refs", cp)
+        self.assertEqual(len(cp["snag_refs"]), 2)
+
+    def test_krate_includes_active_stakes(self):
+        main(["stake", "--title", "Decision", "--body", "Body"])
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertIn("stake_refs", krate)
+        self.assertEqual(len(krate["stake_refs"]), 1)
+
+    def test_krate_includes_active_snags(self):
+        main(["snag", "--title", "Blocker", "--body", "Body", "--status", "blocked"])
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertIn("snag_refs", krate)
+        self.assertEqual(len(krate["snag_refs"]), 1)
+
+    def test_krate_excludes_closed_snags(self):
+        main(["snag", "--title", "Active", "--body", "Body", "--status", "open"])
+        main(["snag", "--title", "Done", "--body", "Body", "--status", "closed"])
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertIn("snag_refs", krate)
+        self.assertEqual(len(krate["snag_refs"]), 1)
+
+    def test_krate_trail_note_lists_stakes_and_snags(self):
+        main(["stake", "--title", "Use stdlib", "--body", "No deps"])
+        main(["snag", "--title", "Bug", "--body", "Crashes", "--status", "open"])
+        main(["krate"])
+        trail_note = open(".krume/export/current-trail-note.md").read()
+        self.assertIn("Active Stakes", trail_note)
+        self.assertIn("Active Snags", trail_note)
+        self.assertIn("Use stdlib", trail_note)
+        self.assertIn("Bug", trail_note)
+
+    def test_check_validates_stake_refs(self):
+        main(["stake", "--title", "T", "--body", "B"])
+        main(["krate"])
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
+
+    def test_check_validates_snag_refs(self):
+        main(["snag", "--title", "T", "--body", "B"])
+        main(["krate"])
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
