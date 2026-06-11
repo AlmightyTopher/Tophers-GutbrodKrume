@@ -263,3 +263,200 @@ class TestCLIRun(unittest.TestCase):
         args = parser.parse_args(["run", "echo", "hi"])
         self.assertEqual(args.command, "run")
         self.assertEqual(args.argv, ["echo", "hi"])
+
+
+class TestCLICheckpoint(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_checkpoint_creates_object(self):
+        exit_code = main(["checkpoint"])
+        self.assertEqual(exit_code, 0)
+        with open(".krume/refs/latest-event") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_checkpoint_appends_trail(self):
+        main(["checkpoint"])
+        trail = []
+        with open(".krume/refs/trail.log") as f:
+            trail = [l.strip() for l in f if l.strip()]
+        self.assertEqual(len(trail), 1)
+
+    def test_checkpoint_updates_latest_event(self):
+        main(["checkpoint"])
+        with open(".krume/refs/latest-event") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_checkpoint_status_unknown_no_proof(self):
+        exit_code = main(["checkpoint"])
+        self.assertEqual(exit_code, 0)
+
+    def test_checkpoint_without_init_fails(self):
+        other = tempfile.mkdtemp()
+        orig = os.getcwd()
+        os.chdir(other)
+        exit_code = main(["checkpoint"])
+        os.chdir(orig)
+        import shutil
+        shutil.rmtree(other, ignore_errors=True)
+        self.assertEqual(exit_code, 1)
+
+    def test_checkpoint_after_run_has_proof(self):
+        main(["run", sys.executable, "-c", "print('ok')"])
+        exit_code = main(["checkpoint"])
+        self.assertEqual(exit_code, 0)
+
+
+class TestCLIKrate(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_krate_creates_manifest(self):
+        exit_code = main(["krate"])
+        self.assertEqual(exit_code, 0)
+
+    def test_krate_export_exists(self):
+        main(["krate"])
+        self.assertTrue(os.path.exists(".krume/export/current-krate.json"))
+
+    def test_krate_trail_note_exists(self):
+        main(["krate"])
+        self.assertTrue(os.path.exists(".krume/export/current-trail-note.md"))
+
+    def test_krate_trailhead_resolves(self):
+        main(["krate"])
+        with open(".krume/refs/trailhead") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_krate_previous_updates(self):
+        main(["krate"])
+        with open(".krume/refs/previous") as f:
+            prev = f.read().strip()
+        self.assertEqual(prev, "UNKNOWN")
+        main(["krate"])
+        with open(".krume/refs/previous") as f:
+            prev = f.read().strip()
+        self.assertTrue(prev.startswith("krume:sha256:"))
+
+    def test_krate_reader_protocol(self):
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertIn("reader_protocol", krate)
+        self.assertTrue(len(krate["reader_protocol"]) > 0)
+
+    def test_krate_priority_queue(self):
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertIn("priority_queue", krate)
+        self.assertTrue(len(krate["priority_queue"]) > 0)
+
+    def test_krate_status_unknown_no_proof(self):
+        main(["krate"])
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertEqual(krate["verification_status"], "UNKNOWN")
+
+    def test_krate_without_init_fails(self):
+        other = tempfile.mkdtemp()
+        orig = os.getcwd()
+        os.chdir(other)
+        exit_code = main(["krate"])
+        os.chdir(orig)
+        import shutil
+        shutil.rmtree(other, ignore_errors=True)
+        self.assertEqual(exit_code, 1)
+
+    def test_krate_after_run_reflects_proof(self):
+        main(["run", sys.executable, "-c", "print('ok')"])
+        exit_code = main(["krate"])
+        self.assertEqual(exit_code, 0)
+
+
+class TestCLIPhase3Integration(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_checkpoint_then_krate_then_check(self):
+        exit_code = main(["checkpoint"])
+        self.assertEqual(exit_code, 0)
+        exit_code = main(["krate"])
+        self.assertEqual(exit_code, 0)
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
+
+    def test_run_checkpoint_krate_check(self):
+        main(["run", sys.executable, "--version"])
+        main(["checkpoint"])
+        main(["krate"])
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
+
+    def test_failed_run_checkpoint_krate_check(self):
+        main(["run", sys.executable, "-c", "import sys; sys.exit(7)"])
+        main(["checkpoint"])
+        exit_code = main(["krate"])
+        self.assertEqual(exit_code, 0)
+        with open(".krume/export/current-krate.json") as f:
+            krate = json.load(f)
+        self.assertEqual(krate["verification_status"], "FAIL")
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 0)
+
+    def test_check_detects_bad_trailhead(self):
+        main(["krate"])
+        with open(".krume/refs/trailhead", "w") as f:
+            f.write("krume:sha256:" + "f" * 64 + "\n")
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 1)
+
+    def test_check_detects_malformed_krate(self):
+        main(["krate"])
+        with open(".krume/export/current-krate.json", "w") as f:
+            f.write("not json\n")
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 1)
+
+    def test_check_detects_missing_trail_note(self):
+        main(["krate"])
+        os.remove(".krume/export/current-trail-note.md")
+        exit_code = main(["check"])
+        self.assertEqual(exit_code, 1)
+
+    def test_parser_checkpoint(self):
+        parser = build_parser()
+        args = parser.parse_args(["checkpoint"])
+        self.assertEqual(args.command, "checkpoint")
+
+    def test_parser_krate(self):
+        parser = build_parser()
+        args = parser.parse_args(["krate"])
+        self.assertEqual(args.command, "krate")
