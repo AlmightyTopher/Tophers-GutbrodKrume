@@ -32,6 +32,17 @@ def build_parser():
 
     adopt_p = sub.add_parser("adopt", help="Adopt existing project into GutbrodKrume tracking")
 
+    stake_p = sub.add_parser("stake", help="Record a decision stake")
+    stake_p.add_argument("--title", required=True, help="Decision title")
+    stake_p.add_argument("--body", required=True, help="Decision details")
+    stake_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
+
+    snag_p = sub.add_parser("snag", help="Record a blocker or problem")
+    snag_p.add_argument("--title", required=True, help="Problem title")
+    snag_p.add_argument("--body", required=True, help="Problem details")
+    snag_p.add_argument("--severity", choices=["open", "closed", "blocked"], default="open", help="Severity level")
+    snag_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
+
     checkpoint_p = sub.add_parser("checkpoint", help="Create a point-in-time project state record")
     krate_p = sub.add_parser("krate", help="Create the current portable handoff packet")
 
@@ -542,6 +553,100 @@ Use `krume read {inventory_ref}` to list all files.
     return 0
 
 
+def cmd_stake(store, args):
+    if not store.is_initialized():
+        print("ERROR: .krume/ not initialized. Run 'krume init' first.", file=sys.stderr)
+        return 1
+
+    parent_ref = store.read_ref("latest-event")
+    if parent_ref == "UNKNOWN":
+        parent_ref = None
+
+    stake = {
+        "schema": "krume/stake/v1",
+        "created_at": _now_iso(),
+        "title": args.title,
+        "body": args.body,
+        "tags": args.tag if args.tag else [],
+    }
+    stake_ref = store.put_object(stake)
+
+    event = {
+        "schema": "krume/event/v1",
+        "kind": "stake",
+        "created_at": _now_iso(),
+        "actor": {"type": "human", "name": "Topher", "tool": None},
+        "summary": args.title,
+        "refs": [stake_ref],
+        "parent_event_ref": parent_ref,
+        "tags": ["stake"] + (args.tag if args.tag else []),
+    }
+    event_ref = store.put_object(event)
+    store.append_trail(event_ref)
+    store.write_ref("latest-event", event_ref)
+
+    trailhead = store.read_ref("trailhead")
+    if trailhead == "UNKNOWN" or trailhead is None:
+        store.write_ref("trailhead", event_ref)
+        store.write_ref("previous", "UNKNOWN")
+    else:
+        store.write_ref("previous", trailhead)
+
+    _update_exports(store, event, event_ref)
+
+    print(f"Stake written: {stake_ref}")
+    print(f"  Title: {args.title}")
+    return 0
+
+
+def cmd_snag(store, args):
+    if not store.is_initialized():
+        print("ERROR: .krume/ not initialized. Run 'krume init' first.", file=sys.stderr)
+        return 1
+
+    parent_ref = store.read_ref("latest-event")
+    if parent_ref == "UNKNOWN":
+        parent_ref = None
+
+    snag = {
+        "schema": "krume/snag/v1",
+        "created_at": _now_iso(),
+        "title": args.title,
+        "body": args.body,
+        "severity": args.severity,
+        "tags": args.tag if args.tag else [],
+    }
+    snag_ref = store.put_object(snag)
+
+    event = {
+        "schema": "krume/event/v1",
+        "kind": "snag",
+        "created_at": _now_iso(),
+        "actor": {"type": "human", "name": "Topher", "tool": None},
+        "summary": args.title,
+        "refs": [snag_ref],
+        "parent_event_ref": parent_ref,
+        "tags": ["snag", args.severity] + (args.tag if args.tag else []),
+    }
+    event_ref = store.put_object(event)
+    store.append_trail(event_ref)
+    store.write_ref("latest-event", event_ref)
+
+    trailhead = store.read_ref("trailhead")
+    if trailhead == "UNKNOWN" or trailhead is None:
+        store.write_ref("trailhead", event_ref)
+        store.write_ref("previous", "UNKNOWN")
+    else:
+        store.write_ref("previous", trailhead)
+
+    _update_exports(store, event, event_ref)
+
+    print(f"Snag written: {snag_ref}")
+    print(f"  Title: {args.title}")
+    print(f"  Severity: {args.severity}")
+    return 0
+
+
 # ── Phase 3 commands ────────────────────────────────────────────
 
 
@@ -740,6 +845,8 @@ def main(argv=None):
         "read": cmd_read,
         "run": cmd_run,
         "adopt": cmd_adopt,
+        "stake": cmd_stake,
+        "snag": cmd_snag,
         "checkpoint": cmd_checkpoint,
         "krate": cmd_krate,
         "check": cmd_check,
