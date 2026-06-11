@@ -197,3 +197,69 @@ class TestCLIErrorHandling(unittest.TestCase):
     def test_note_missing_summary(self):
         with self.assertRaises(SystemExit):
             main(["note"])
+
+
+class TestCLIRun(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        main(["init"])
+
+    def tearDown(self):
+        os.chdir(self.orig_cwd)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_run_python(self):
+        exit_code = main(["run", sys.executable, "-c", "print('hello')"])
+        self.assertEqual(exit_code, 0)
+
+    def test_run_writes_objects(self):
+        main(["run", sys.executable, "-c", "print('test')"])
+        self.assertTrue(os.path.exists(".krume/refs/latest-event"))
+        with open(".krume/refs/latest-event") as f:
+            ref = f.read().strip()
+        self.assertTrue(ref.startswith("krume:sha256:"))
+
+    def test_run_appends_trail(self):
+        main(["run", sys.executable, "-c", "print('one')"])
+        main(["run", sys.executable, "-c", "print('two')"])
+        with open(".krume/refs/trail.log") as f:
+            lines = [l.strip() for l in f if l.strip()]
+        self.assertEqual(len(lines), 2)
+
+    def test_run_with_dash_dash(self):
+        exit_code = main(["run", "--", sys.executable, "-c", "print('dash')"])
+        self.assertEqual(exit_code, 0)
+
+    def test_run_without_init_fails(self):
+        other = tempfile.mkdtemp()
+        orig = os.getcwd()
+        os.chdir(other)
+        exit_code = main(["run", sys.executable, "-c", "print('fail')"])
+        os.chdir(orig)
+        import shutil
+        shutil.rmtree(other, ignore_errors=True)
+        self.assertEqual(exit_code, 1)
+
+    def test_run_command_not_found(self):
+        exit_code = main(["run", "nonexistent_cmd_xyz123"])
+        self.assertNotEqual(exit_code, 0)
+
+    def test_run_no_command(self):
+        exit_code = main(["run"])
+        self.assertEqual(exit_code, 1)
+
+    def test_run_proof_exists(self):
+        main(["run", sys.executable, "-c", "print('proof-test')"])
+        trail = []
+        with open(".krume/refs/trail.log") as f:
+            trail = [l.strip() for l in f if l.strip()]
+        self.assertTrue(len(trail) >= 1)
+
+    def test_parser_run(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "echo", "hi"])
+        self.assertEqual(args.command, "run")
+        self.assertEqual(args.argv, ["echo", "hi"])
