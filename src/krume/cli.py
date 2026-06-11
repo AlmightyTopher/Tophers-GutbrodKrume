@@ -40,7 +40,7 @@ def build_parser():
     snag_p = sub.add_parser("snag", help="Record a blocker or problem")
     snag_p.add_argument("--title", required=True, help="Problem title")
     snag_p.add_argument("--body", required=True, help="Problem details")
-    snag_p.add_argument("--severity", choices=["open", "closed", "blocked"], default="open", help="Severity level")
+    snag_p.add_argument("--status", choices=["open", "closed", "blocked"], default="open", help="Status level")
     snag_p.add_argument("--tag", action="append", default=[], help="Add a tag (repeatable)")
 
     checkpoint_p = sub.add_parser("checkpoint", help="Create a point-in-time project state record")
@@ -613,7 +613,7 @@ def cmd_snag(store, args):
         "created_at": _now_iso(),
         "title": args.title,
         "body": args.body,
-        "severity": args.severity,
+        "status": args.status,
         "tags": args.tag if args.tag else [],
     }
     snag_ref = store.put_object(snag)
@@ -626,7 +626,7 @@ def cmd_snag(store, args):
         "summary": args.title,
         "refs": [snag_ref],
         "parent_event_ref": parent_ref,
-        "tags": ["snag", args.severity] + (args.tag if args.tag else []),
+        "tags": ["snag", args.status] + (args.tag if args.tag else []),
     }
     event_ref = store.put_object(event)
     store.append_trail(event_ref)
@@ -643,7 +643,7 @@ def cmd_snag(store, args):
 
     print(f"Snag written: {snag_ref}")
     print(f"  Title: {args.title}")
-    print(f"  Severity: {args.severity}")
+    print(f"  Status: {args.status}")
     return 0
 
 

@@ -617,8 +617,8 @@ class TestCLISnag(unittest.TestCase):
             ref = f.read().strip()
         self.assertTrue(ref.startswith("krume:sha256:"))
 
-    def test_snag_with_severity(self):
-        exit_code = main(["snag", "--title", "T", "--body", "B", "--severity", "blocked"])
+    def test_snag_with_status(self):
+        exit_code = main(["snag", "--title", "T", "--body", "B", "--status", "blocked"])
         self.assertEqual(exit_code, 0)
 
     def test_snag_with_tag(self):
